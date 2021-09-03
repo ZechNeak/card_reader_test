@@ -19,10 +19,10 @@
  *              limit [int]      - Sets the max number of full revolutions the motor will spin.
  *                                 If no arg is specified, prints the current number instead.
  *                             
- *              maxSpeed [int]   - Sets the max speed of the motor in pulses/rev.
+ *              maxSpeed [int]   - Sets the max speed of the motor in steps/sec.
  *                                 If no arg is specified, prints the current max speed instead.
  *                             
- *              speed [int]      - Sets the current speed of the motor in pulses/rev.
+ *              speed [int]      - Sets the current speed of the motor in steps/sec.
  *                                 If no arg is specified, prints the current speed instead.
  *                             
  *              origin           - Sets the origin (i.e. position 0) of the motor. 
@@ -79,7 +79,9 @@ bool commandReady = false;
  *  full revolution.
  */
 int runningSpeed = 0;
-int tempSpeed = 0;             // tracks either a previous or new speed val
+int tempSpeed = 0;              // tracks a previous or new speed val to be used after a halt
+bool runMode = false;
+bool isHalted = false;
  
 
 /* ==================================================================================================== */
@@ -92,17 +94,16 @@ void setup() {
   Serial.println("<Set current position as origin>");
   stepper.setCurrentPosition(0);
 
-  Serial.println("<Set max speed to 1600 pulses/sec>");
+  Serial.println("<Set max speed to 1600 steps/sec>");
   stepper.setMaxSpeed(1600);
 
-  Serial.println("<Set running speed to 600 pulses/sec>");
-  runningSpeed = 600;
-  tempSpeed = runningSpeed;
+  Serial.println("<Set running speed to 800 steps/sec>");
+  runningSpeed = 800;
 }
 
 void loop() {
   
-  if(revNum != revLimit) {
+  if(runMode && revNum != revLimit) {
     runMotor();
   }
   else if (Serial.available() > 0) { 
@@ -126,13 +127,23 @@ bool runMotor() {
     // Check for user commands via serial first
     if (Serial.available() > 0) serialCommandEvent();
 
+    // Freezing the current rev, then possibly displacing position, will
+    // interrupt the sequence, so better restart last iteration
+    if (runningSpeed != 0 && isHalted) {
+      revNum--;
+      break;
+    }
+
     stepper.setSpeed(runningSpeed);
     stepper.runSpeed();
   }
-  stepper.setCurrentPosition(0);      // reset origin for next rev
+  if (!isHalted)
+    stepper.setCurrentPosition(0);      // reset origin for next rev
   
   if(revNum == revLimit) {
     Serial.println("STATUS: " + (String)revNum + " revolutions done. Stopping motor...\n");
+    runMode = false;
+    revNum = 0;
     delay(1000);
   }
   delay(800);
@@ -225,6 +236,8 @@ void processCommand() {
     else if (strcmp(commandMessage, "stop") == 0) stopMotor(true);
     
     else if (strcmp(commandMessage, "restart") == 0) restartMotor();
+
+    else Serial.println("ERROR: Please input a valid command.");
     
     commandReady = false;
   }
@@ -262,23 +275,31 @@ void updateRevLimit(int newLimit) {
   Serial.println("UPDATE: motor will now spin up to " + String(revLimit) + " revolutions");
 }
 
-/* 'maxSpeed [pulses per sec]' */
+/* 'maxSpeed [steps per sec]' */
 void updateMaxSpeed(int newMaxSpeed) {
+  if (newMaxSpeed < runningSpeed) {
+    Serial.println("UPDATE: adjusting running speed to match new max speed");
+    runningSpeed = newMaxSpeed;
+  }
+  
   stepper.setMaxSpeed(newMaxSpeed);
   Serial.println("UPDATE: max motor speed is now " + String(int(stepper.maxSpeed())) + " steps/s");
 }
 
-/* 'speed [pulses per sec]' */
+/* 'speed [steps per sec]' */
 void updateSpeed(int newSpeed) {
-  if (newSpeed > stepper.maxSpeed()) {
-    Serial.println("UPDATE: requested speed higher than maxSpeed of " + 
+  if (newSpeed == 0) freezeMotor();
+  
+  else if (newSpeed > stepper.maxSpeed()) {
+    Serial.println("UPDATE: requested speed is higher than maxSpeed of " + 
                     String(int(stepper.maxSpeed())) + " steps/s");
-    runningSpeed = int(stepper.maxSpeed());
+    newSpeed = int(stepper.maxSpeed());
+    runningSpeed = newSpeed;
   }
+  else if (isHalted) tempSpeed = newSpeed;
   else runningSpeed = newSpeed;
   
-  Serial.println("UPDATE: motor running speed is now " + String(runningSpeed) + " steps/s");
-  stepper.setSpeed(newSpeed);
+  Serial.println("UPDATE: motor running speed is now " + String(newSpeed) + " steps/s");
 }
 
 /* 'origin' */
@@ -297,8 +318,34 @@ void updateOrigin() {
  *  the set origin.
 */
 void displaceTo(bool isAbsolute, int steps) {
-  if (!isAbsolute) Serial.println("[Placeholder] 'move' command TBD"); 
-  else Serial.println("[Placeholder] 'goto' command TBD"); 
+  if (runMode) {
+    Serial.println("ERROR: motor must first not be running");
+  }
+  else if (isAbsolute && (0 > steps || steps > pulsesPerRev)) {
+    Serial.println("ERROR: target position must be between 0 and " + String(pulsesPerRev));
+  }
+  else {
+    if (isHalted) runningSpeed = tempSpeed;
+
+    // Set new target position, whether relative to current position or origin
+    if (!isAbsolute) {
+      Serial.println("DISPLACE: " + String(steps) + " steps");
+      stepper.move(steps);
+    }
+    else {
+      Serial.println("DISPLACE: " + String(steps) + " steps from origin");
+      stepper.moveTo(steps);
+    }
+
+    while(stepper.currentPosition() != stepper.targetPosition()) {
+      stepper.setSpeed(runningSpeed);
+      stepper.runSpeedToPosition();
+    }
+    
+    // 'True' modulo operation (Python's result) to keep position value within bounds
+    stepper.setCurrentPosition(((stepper.currentPosition() % pulsesPerRev)
+                               + pulsesPerRev) % pulsesPerRev);
+  }
 }
 
 // -----------------------------------------------------------------------------------------------------
@@ -308,7 +355,18 @@ void displaceTo(bool isAbsolute, int steps) {
  *  Starts or resumes the running sequence.
 */
 void startMotor() {
-  Serial.println("[Placeholder] 'go' command TBD"); 
+  if (runMode && runningSpeed != 0) Serial.println("ERROR: motor is already running");
+  
+  else if (revNum != revLimit) {
+
+    if (isHalted) {
+      runningSpeed = tempSpeed;
+      isHalted = false;
+    }   
+    runMode = true;
+    Serial.println("STATUS: motor is now running");
+  }
+  else Serial.println("ERROR: limit has been reached, cannot resume without restarting");
 }
 
 /*  'halt' 
@@ -316,7 +374,16 @@ void startMotor() {
  *  Immediately freezes the motor in place without finishing the revolution.
 */
 void freezeMotor() {
-  Serial.println("[Placeholder] 'halt' command TBD"); 
+  if (isHalted) Serial.println("ERROR: motor is already frozen");
+
+  else {
+    isHalted = true;
+    runMode = false;
+    tempSpeed = runningSpeed;
+    runningSpeed = 0;
+    stepper.stop();
+    Serial.println("STATUS: motor is now frozen");
+  }
 }
 
 /*  'pause' or 'stop'
@@ -325,8 +392,19 @@ void freezeMotor() {
  *  If [reset] is true, then also resets the revolution counter.
 */
 void stopMotor(bool reset) {
-  if (!reset) Serial.println("[Placeholder] 'pause' command TBD"); 
-  else Serial.println("[Placeholder] 'stop' command TBD"); 
+  if (!runMode && !isHalted) Serial.println("ERROR: motor is already paused/stopped");
+  
+  else { 
+    if (isHalted) startMotor();           // finish current revolution
+    
+    runMode = false;
+  
+    if (!reset) Serial.println("STATUS: motor is now pausing...");
+    else {
+      revNum = 0;
+      Serial.println("STATUS: motor is now stopped. Counter has been reset."); 
+    }
+  }
 }
 
 /*  'restart'
@@ -334,6 +412,10 @@ void stopMotor(bool reset) {
  *  Same behavior as 'stop', but also starts the motor up again afterwards. 
 */
 void restartMotor() {
+  if (isHalted) startMotor();           // finish current revolution
+  
   revNum = 0;
+  runMode = true;
   Serial.println("STATUS: motor is now restarting...");
+  delay(1500);
 }
