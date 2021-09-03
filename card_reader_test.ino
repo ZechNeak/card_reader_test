@@ -16,9 +16,13 @@
  *    
  *              pos              - Shows the current position relative to origin.
  *              
+ *              maxPulses [int]  - Sets the number of pulses per full revolution of the motor.
+ *                                 This must match the step configuration of the accompanying stepper driver.
+ *                                 If no arg is specified, prints the current number instead.
+ *
  *              limit [int]      - Sets the max number of full revolutions the motor will spin.
  *                                 If no arg is specified, prints the current number instead.
- *                             
+ *
  *              maxSpeed [int]   - Sets the max speed of the motor in steps/sec.
  *                                 If no arg is specified, prints the current max speed instead.
  *                             
@@ -205,6 +209,8 @@ void processCommand() {
     // Match command and execute it
     // TODO: Create an alphabetically sorted array of string-function pairs and use binary search instead
     if (strcmp(commandMessage, "pos") == 0) showCurrentPosition();
+
+    else if (strcmp(commandMessage, "maxPulses") == 0 && token == NULL) showPulsesPerRev();
     
     else if (strcmp(commandMessage, "limit") == 0 && token == NULL) showRevLimit();
     
@@ -212,6 +218,8 @@ void processCommand() {
     
     else if (strcmp(commandMessage, "speed") == 0  && token == NULL) showCurrentSpeed();
 // -----------------------------------------------------------------------------------------------------
+
+    else if (strcmp(commandMessage, "maxPulses") == 0) updatePulsesPerRev(commandArg);
     
     else if (strcmp(commandMessage, "limit") == 0) updateRevLimit(commandArg);
     
@@ -253,6 +261,11 @@ void showCurrentPosition() {
   Serial.println("GET: Current motor position is " + String(stepper.currentPosition()) + " steps from origin");
 }
 
+ /* 'maxPulses' */
+void showPulsesPerRev() {
+  Serial.println("GET: Each full revolution requires " + String(pulsesPerRev) + " pulses");
+}
+
 /* 'limit' */
 void showRevLimit() {
   Serial.println("GET: Motor will run up to " + String(revLimit) + " revolutions");
@@ -268,6 +281,12 @@ void showCurrentSpeed() {
   Serial.println("GET: Current motor speed is " + String(runningSpeed) + " steps/s");
 }
 // -----------------------------------------------------------------------------------------------------
+
+/* 'maxPulses [# pulses per revolution]' */
+void updatePulsesPerRev(int newConfig) {
+  pulsesPerRev = newConfig;
+  Serial.println("GET: Each full revolution now requires " + String(pulsesPerRev) + " pulses");
+}
 
 /* 'limit [max # revolutions]' */
 void updateRevLimit(int newLimit) {
