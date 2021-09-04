@@ -63,6 +63,47 @@
 #define stepPin 3
 #define motorInterfaceType 1    // for using a stepper driver
 
+// Serial print statements stored in flash memory instead of SRAM
+const char intro_origin[] PROGMEM = "<Set current position as origin>\n";
+const char intro_maxspeed[] PROGMEM = "<Set max speed to 1600 steps/sec>\n";
+const char intro_speed[] PROGMEM = "<Set running speed for all cards to 800 steps/sec>\n";
+const char rev_count1[] PROGMEM = "<Rev ";
+const char rev_count2[] PROGMEM = ">\n";
+const char revs_done1[] PROGMEM = "STATUS: ";
+const char revs_done2[] PROGMEM = " revolutions done. Stopping motor...";
+const char serial_warning[] PROGMEM = "<Warning: Index has exceeded string length>\n";
+const char error_invalid[] PROGMEM = "ERROR: Please input a valid command.\n";
+const char pos_get1[] PROGMEM = "GET: Current motor position is ";
+const char pos_get2[] PROGMEM = " steps from origin";
+const char maxpulses_get1[] PROGMEM = "GET: Each full revolution requires ";
+const char limit_get1[] PROGMEM = "GET: Motor will run up to ";
+const char maxspeed_get1[] PROGMEM = "GET: Max motor speed is ";
+const char speed_get1[] PROGMEM = "GET: Current motor speed is ";
+const char maxpulses_set1[] PROGMEM = "GET: Each full revolution now requires ";
+const char limit_set1[] PROGMEM = "UPDATE: motor will now spin up to ";
+const char autoadjust_speed[] PROGMEM = "UPDATE: adjusting running speed to match new max speed\n";
+const char maxspeed_set1[] PROGMEM = "UPDATE: max motor speed is now ";
+const char throttle_speed1[] PROGMEM = "UPDATE: requested speed is higher than maxSpeed of ";
+const char speed_set1[] PROGMEM = "UPDATE: motor running speed is now ";
+const char origin_set[] PROGMEM = "UPDATE: origin has been reset to current position\n";
+const char error_running_a[] PROGMEM = "ERROR: motor must first not be running\n";
+const char error_running_b[] PROGMEM = "ERROR: motor is already running\n";
+const char error_bounds[] PROGMEM = "ERROR: target position must be between 0 and ";
+const char displace_by2[] PROGMEM = " steps";
+const char displace_to2[] PROGMEM = " steps from origin";
+const char status_running[] PROGMEM = "STATUS: motor is now running\n";
+const char error_limit[] PROGMEM = "ERROR: limit has been reached, cannot resume without restarting\n";
+const char error_frozen[] PROGMEM = "ERROR: motor is already frozen\n";
+const char status_frozen[] PROGMEM = "STATUS: motor is now frozen\n";
+const char error_stopped[] PROGMEM = "ERROR: motor is already paused/stopped\n";
+const char status_pausing[] PROGMEM = "STATUS: motor is now pausing...\n";
+const char status_stopped[] PROGMEM = "STATUS: motor is now stopped. Counter has been reset.\n";
+const char status_restarting[] PROGMEM = "STATUS: motor is now restarting...\n";
+const char pulse_count[] PROGMEM = " pulses";
+const char rev_amount[] PROGMEM = " revolutions";
+const char steps_per_sec[] PROGMEM = " steps/s";
+const char displace_msg[] PROGMEM = "DISPLACE: ";
+
 AccelStepper stepper = AccelStepper(motorInterfaceType, stepPin, dirPin);
 
 // Depends on stepper motor model and configuration (Default: 800 for NEMA 23)
@@ -78,12 +119,8 @@ char charData[numChars] = {};
 bool commandReady = false;
 
 // Affects and tracks control of motor
-/*  Note that runningSpeed tracks 'runmode' speed at all times. This is opposed to stepper.speed(),
- *  which because of a quirk of stepper.setCurrentPosition(), will be set to 0 after every 
- *  full revolution.
- */
 int runningSpeed = 0;
-int tempSpeed = 0;              // tracks a previous or new speed val to be used after a halt
+int tempSpeed = 0;                        // previous or new speed val to be used after a halt
 bool runMode = false;
 bool isHalted = false;
  
@@ -95,13 +132,13 @@ void setup() {
 
   // Sets initial position to 0. Also implicitly sets current speed to 0.
   // (Note: Please manually ensure that no card is over the reader before starting the Arduino.)
-  Serial.println("<Set current position as origin>");
+  printFromFlash(intro_origin);
   stepper.setCurrentPosition(0);
 
-  Serial.println("<Set max speed to 1600 steps/sec>");
+  printFromFlash(intro_maxspeed);
   stepper.setMaxSpeed(1600);
 
-  Serial.println("<Set running speed to 800 steps/sec>");
+  printFromFlash(intro_speed);
   runningSpeed = 800;
 }
 
@@ -125,7 +162,7 @@ void loop() {
 bool runMotor() {
   revNum++;
 
-  Serial.println("<Rev " + String(revNum) + ">\n");
+  printFromFlashAndMore(rev_count1, revNum, rev_count2);
   while(abs(stepper.currentPosition()) != abs(pulsesPerRev))
   {
     // Check for user commands via serial first
@@ -145,12 +182,33 @@ bool runMotor() {
     stepper.setCurrentPosition(0);      // reset origin for next rev
   
   if(revNum == revLimit) {
-    Serial.println("STATUS: " + (String)revNum + " revolutions done. Stopping motor...\n");
+    printFromFlashAndMore(revs_done1, revNum, revs_done2);
     runMode = false;
     revNum = 0;
     delay(1000);
   }
   delay(800);
+}
+
+
+/* -------------------------------------------------------------------
+ * Reads Serial print statements stored in flash memory via PROGMEM,
+ * and variable values if provided
+ * ------------------------------------------------------------------- */
+void printFromFlashAndMore(const char* statement1, int val, const char* statement2) {
+  printFromFlash(statement1);
+  Serial.print(String(val));
+  printFromFlash(statement2);
+  Serial.println();
+}
+ 
+void printFromFlash(const char* statement) {
+  char currChar;
+  
+  for (byte i = 0; i < strlen_P(statement); i++) {
+    currChar = pgm_read_byte_near(statement + i);
+    Serial.print(currChar);
+  }
 }
 
 
@@ -170,7 +228,7 @@ void serialCommandEvent() {
       i++;
 
       if (i >= numChars) {
-        Serial.println("<Warning: Index has exceeded string length>");
+        printFromFlash(serial_warning);
         i = numChars - 1;
       }
     }
@@ -245,7 +303,7 @@ void processCommand() {
     
     else if (strcmp(commandMessage, "restart") == 0) restartMotor();
 
-    else Serial.println("ERROR: Please input a valid command.");
+    else printFromFlash(error_invalid);
     
     commandReady = false;
   }
@@ -258,51 +316,51 @@ void processCommand() {
  
  /* 'pos' */
 void showCurrentPosition() {
-  Serial.println("GET: Current motor position is " + String(stepper.currentPosition()) + " steps from origin");
+  printFromFlashAndMore(pos_get1, stepper.currentPosition(), pos_get2);
 }
 
  /* 'maxPulses' */
 void showPulsesPerRev() {
-  Serial.println("GET: Each full revolution requires " + String(pulsesPerRev) + " pulses");
+  printFromFlashAndMore(maxpulses_get1, pulsesPerRev, pulse_count);
 }
 
 /* 'limit' */
 void showRevLimit() {
-  Serial.println("GET: Motor will run up to " + String(revLimit) + " revolutions");
+  printFromFlashAndMore(limit_get1, revLimit, rev_amount);
 }
 
 /* 'maxSpeed' */
 void showMaxSpeed() {
-  Serial.println("GET: Max motor speed is " + String(int(stepper.maxSpeed())) + " steps/s");
+  printFromFlashAndMore(maxspeed_get1, int(stepper.maxSpeed()), steps_per_sec);
 }
 
 /* 'speed' */
 void showCurrentSpeed() {
-  Serial.println("GET: Current motor speed is " + String(runningSpeed) + " steps/s");
+  printFromFlashAndMore(speed_get1, runningSpeed, steps_per_sec);
 }
 // -----------------------------------------------------------------------------------------------------
 
 /* 'maxPulses [# pulses per revolution]' */
 void updatePulsesPerRev(int newConfig) {
   pulsesPerRev = newConfig;
-  Serial.println("GET: Each full revolution now requires " + String(pulsesPerRev) + " pulses");
+  printFromFlashAndMore(maxpulses_set1, pulsesPerRev, pulse_count);
 }
 
 /* 'limit [max # revolutions]' */
 void updateRevLimit(int newLimit) {
   revLimit = newLimit;
-  Serial.println("UPDATE: motor will now spin up to " + String(revLimit) + " revolutions");
+  printFromFlashAndMore(limit_set1, revLimit, rev_amount);
 }
 
 /* 'maxSpeed [steps per sec]' */
 void updateMaxSpeed(int newMaxSpeed) {
   if (newMaxSpeed < runningSpeed) {
-    Serial.println("UPDATE: adjusting running speed to match new max speed");
+    printFromFlash(autoadjust_speed);
     runningSpeed = newMaxSpeed;
   }
   
   stepper.setMaxSpeed(newMaxSpeed);
-  Serial.println("UPDATE: max motor speed is now " + String(int(stepper.maxSpeed())) + " steps/s");
+  printFromFlashAndMore(maxspeed_set1, int(stepper.maxSpeed()), steps_per_sec);
 }
 
 /* 'speed [steps per sec]' */
@@ -310,21 +368,20 @@ void updateSpeed(int newSpeed) {
   if (newSpeed == 0) freezeMotor();
   
   else if (newSpeed > stepper.maxSpeed()) {
-    Serial.println("UPDATE: requested speed is higher than maxSpeed of " + 
-                    String(int(stepper.maxSpeed())) + " steps/s");
+    printFromFlashAndMore(throttle_speed1, int(stepper.maxSpeed()), steps_per_sec);
     newSpeed = int(stepper.maxSpeed());
     runningSpeed = newSpeed;
   }
   else if (isHalted) tempSpeed = newSpeed;
   else runningSpeed = newSpeed;
   
-  Serial.println("UPDATE: motor running speed is now " + String(newSpeed) + " steps/s");
+  printFromFlashAndMore(speed_set1, newSpeed, steps_per_sec);
 }
 
 /* 'origin' */
 void updateOrigin() {
   stepper.setCurrentPosition(0);
-  Serial.println("UPDATE: origin has been reset to current position");
+  printFromFlash(origin_set);
 }
 // -----------------------------------------------------------------------------------------------------
 
@@ -338,21 +395,21 @@ void updateOrigin() {
 */
 void displaceTo(bool isAbsolute, int steps) {
   if (runMode) {
-    Serial.println("ERROR: motor must first not be running");
+    printFromFlash(error_running_a);
   }
   else if (isAbsolute && (0 > steps || steps > pulsesPerRev)) {
-    Serial.println("ERROR: target position must be between 0 and " + String(pulsesPerRev));
+    printFromFlashAndMore(error_bounds, pulsesPerRev, "");
   }
   else {
     if (isHalted) runningSpeed = tempSpeed;
 
     // Set new target position, whether relative to current position or origin
     if (!isAbsolute) {
-      Serial.println("DISPLACE: " + String(steps) + " steps");
+      printFromFlashAndMore(displace_msg, steps, displace_by2);
       stepper.move(steps);
     }
     else {
-      Serial.println("DISPLACE: " + String(steps) + " steps from origin");
+      printFromFlashAndMore(displace_msg, steps, displace_to2);
       stepper.moveTo(steps);
     }
 
@@ -374,7 +431,7 @@ void displaceTo(bool isAbsolute, int steps) {
  *  Starts or resumes the running sequence.
 */
 void startMotor() {
-  if (runMode && runningSpeed != 0) Serial.println("ERROR: motor is already running");
+  if (runMode && runningSpeed != 0) printFromFlash(error_running_b);
   
   else if (revNum != revLimit) {
 
@@ -383,9 +440,9 @@ void startMotor() {
       isHalted = false;
     }   
     runMode = true;
-    Serial.println("STATUS: motor is now running");
+    printFromFlash(status_running);
   }
-  else Serial.println("ERROR: limit has been reached, cannot resume without restarting");
+  else printFromFlash(error_limit);
 }
 
 /*  'halt' 
@@ -393,7 +450,7 @@ void startMotor() {
  *  Immediately freezes the motor in place without finishing the revolution.
 */
 void freezeMotor() {
-  if (isHalted) Serial.println("ERROR: motor is already frozen");
+  if (isHalted) printFromFlash(error_frozen);
 
   else {
     isHalted = true;
@@ -401,7 +458,7 @@ void freezeMotor() {
     tempSpeed = runningSpeed;
     runningSpeed = 0;
     stepper.stop();
-    Serial.println("STATUS: motor is now frozen");
+    printFromFlash(status_frozen);
   }
 }
 
@@ -411,17 +468,17 @@ void freezeMotor() {
  *  If [reset] is true, then also resets the revolution counter.
 */
 void stopMotor(bool reset) {
-  if (!runMode && !isHalted) Serial.println("ERROR: motor is already paused/stopped");
+  if (!runMode && !isHalted) printFromFlash(error_stopped);
   
   else { 
     if (isHalted) startMotor();           // finish current revolution
     
     runMode = false;
   
-    if (!reset) Serial.println("STATUS: motor is now pausing...");
+    if (!reset) printFromFlash(status_pausing);
     else {
       revNum = 0;
-      Serial.println("STATUS: motor is now stopped. Counter has been reset."); 
+      printFromFlash(status_stopped);
     }
   }
 }
@@ -435,6 +492,6 @@ void restartMotor() {
   
   revNum = 0;
   runMode = true;
-  Serial.println("STATUS: motor is now restarting...");
+  printFromFlash(status_restarting);
   delay(1500);
 }
