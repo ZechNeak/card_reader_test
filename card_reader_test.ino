@@ -14,44 +14,50 @@
  *    This code makes possible basic serial commands that a user or script can utilize to control the motor.
  *    Such commands include:
  *    
- *              pos              - Shows the current position relative to origin.
+ *              pos                  - Shows the current position relative to origin.
  *              
- *              maxPulses [int]  - Sets the number of pulses per full revolution of the motor.
- *                                 This must match the step configuration of the accompanying stepper driver.
- *                                 If no arg is specified, prints the current number instead.
+ *              maxPulses [pulses]   - Sets the number of pulses per full revolution of the motor.
+ *                                     This must match the step configuration of the accompanying stepper driver.
+ *                                     If no arg is specified, prints the current number instead.
  *
- *              limit [int]      - Sets the max number of full revolutions the motor will spin.
- *                                 If no arg is specified, prints the current number instead.
+ *              limit [revs]         - Sets the max number of full revolutions the motor will spin.
+ *                                     If no arg is specified, prints the current number instead.
  *
- *              maxSpeed [int]   - Sets the max speed of the motor in steps/sec.
- *                                 If no arg is specified, prints the current max speed instead.
+ *              maxSpeed [steps/s]   - Sets the max speed of the motor in steps/sec. (or pulses/sec)
+ *                                     If no arg is specified, prints the current max speed instead.
  *                             
- *              speed [int]      - Sets the current speed of the motor in steps/sec.
- *                                 If no arg is specified, prints the current speed instead.
+ *              speed [steps/s]      - Sets the current speed of the motor in steps/sec. (or pulses/sec)
+ *                                     If no arg is specified, prints the current speed instead.
  *                             
- *              origin           - Sets the origin (i.e. position 0) of the motor. 
- *                                 For consistency, this must be done before any sequence is run.
+ *              origin               - Sets the origin (i.e. position 0) of the motor. 
+ *                                     For consistency, this must be done before any sequence is run.
  *                             
- *              move [int]       - If the motor is not in runmode, moves the motor by the specified
- *                                 amount of pulses. 
- *                                 A negative value will cause the motor to spin backwards.
+ *              move [pulses]        - If the motor is not in runmode, moves the motor by the specified
+ *                                     amount of pulses. 
+ *                                     A negative value will cause the motor to spin backwards.
  *                                 
- *              goto [int]       - If the motor is not in runmode, moves the motor to the specified
- *                                 position, relative to the origin.
- *                                 [TODO: Use degrees instead of pulse values?]
+ *              goto [pulses]        - If the motor is not in runmode, moves the motor to the specified
+ *                                     position in pulses, relative to the origin.
+ *                                     [TODO: Use degrees instead of pulse values?]
  *                                 
- *              go               - Enables runmode, and starts the motor running sequence, whether 
- *                                 halted, paused, or stopped.
+ *              go                   - Enables runmode, and starts the motor running sequence, whether 
+ *                                     halted, paused, or stopped.
  *              
- *              halt             - Freezes the motor in place immediately, and disables runmode.
+ *              halt                 - Freezes the motor in place immediately, and disables runmode.
  *              
- *              pause            - Stops the motor only after its current revolution is complete, then 
- *                                 disables runmode.
+ *              pause                - Stops the motor only after its current revolution is complete, then 
+ *                                     disables runmode.
  *                                 
- *              stop             - Same as pause, but also resets the revolution counter.
+ *              stop                 - Same as pause, but also resets the revolution counter.
  *              
- *              restart          - Performs a stop on the motor, then restarts the running sequence again
- *                                 from the beginning.
+ *              restart              - Performs a stop on the motor, then restarts the running sequence again
+ *                                     from the beginning.
+ *                                 
+ *              scantime [id][ms]    - Sets the time a specified card is over the reader, in milliseconds.                  
+ *                                     If no 2nd arg is specified, prints the current scantime instead.
+ *              
+ *              offtime [id][ms]     - Sets the time a specified card is over the reader, in milliseconds.
+ *                                     If no 2nd arg is specified, prints the current offtime instead.
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -62,19 +68,21 @@
 #define dirPin 2
 #define stepPin 3
 #define motorInterfaceType 1    // for using a stepper driver
+#define maxCardCount 4
 
 // Serial print statements stored in flash memory instead of SRAM
 const char intro_origin[] PROGMEM = "<Set current position as origin>\n";
 const char intro_maxspeed[] PROGMEM = "<Set max speed to 1600 steps/sec>\n";
-const char intro_speed[] PROGMEM = "<Set running speed for all cards to 800 steps/sec>\n";
+const char intro_speed[] PROGMEM = "<Set running speed for all cards to 400 steps/sec>\n";
+const char intro_holdtimes[] PROGMEM = "<Set default scantimes and offtimes for all cards>\n";
 const char rev_count1[] PROGMEM = "<Rev ";
-const char rev_count2[] PROGMEM = ">\n";
+const char rev_count2[] PROGMEM = ">\n\n";
 const char revs_done1[] PROGMEM = "STATUS: ";
-const char revs_done2[] PROGMEM = " revolutions done. Stopping motor...";
+const char revs_done2[] PROGMEM = " revolutions done. Stopping motor...\n";
 const char serial_warning[] PROGMEM = "<Warning: Index has exceeded string length>\n";
 const char error_invalid[] PROGMEM = "ERROR: Please input a valid command.\n";
 const char pos_get1[] PROGMEM = "GET: Current motor position is ";
-const char pos_get2[] PROGMEM = " steps from origin";
+const char pos_get2[] PROGMEM = " steps from origin\n";
 const char maxpulses_get1[] PROGMEM = "GET: Each full revolution requires ";
 const char limit_get1[] PROGMEM = "GET: Motor will run up to ";
 const char maxspeed_get1[] PROGMEM = "GET: Max motor speed is ";
@@ -89,20 +97,33 @@ const char origin_set[] PROGMEM = "UPDATE: origin has been reset to current posi
 const char error_running_a[] PROGMEM = "ERROR: motor must first not be running\n";
 const char error_running_b[] PROGMEM = "ERROR: motor is already running\n";
 const char error_bounds[] PROGMEM = "ERROR: target position must be between 0 and ";
-const char displace_by2[] PROGMEM = " steps";
-const char displace_to2[] PROGMEM = " steps from origin";
+const char displace_msg[] PROGMEM = "DISPLACE: ";
+const char displace_by2[] PROGMEM = " steps\n";
+const char displace_to2[] PROGMEM = " steps from origin\n";
 const char status_running[] PROGMEM = "STATUS: motor is now running\n";
 const char error_limit[] PROGMEM = "ERROR: limit has been reached, cannot resume without restarting\n";
 const char error_frozen[] PROGMEM = "ERROR: motor is already frozen\n";
 const char status_frozen[] PROGMEM = "STATUS: motor is now frozen\n";
 const char error_stopped[] PROGMEM = "ERROR: motor is already paused/stopped\n";
 const char status_pausing[] PROGMEM = "STATUS: motor is now pausing...\n";
-const char status_stopped[] PROGMEM = "STATUS: motor is now stopped. Counter has been reset.\n";
+const char status_stopped[] PROGMEM = "STATUS: motor is now stopping...\n";
 const char status_restarting[] PROGMEM = "STATUS: motor is now restarting...\n";
-const char pulse_count[] PROGMEM = " pulses";
-const char rev_amount[] PROGMEM = " revolutions";
-const char steps_per_sec[] PROGMEM = " steps/s";
-const char displace_msg[] PROGMEM = "DISPLACE: ";
+const char scantime_set1[] PROGMEM = "UPDATE: Scan time for Card ";
+const char scantime_get1[] PROGMEM = "GET: Scan time for Card ";
+const char scantime_2[] PROGMEM = " is now ";
+const char offtime_set1[] PROGMEM = "UPDATE: Off time for Card ";
+const char offtime_get1[] PROGMEM = "GET: Off time for Card ";
+const char offtime_2[] PROGMEM = " after scanning is now ";
+const char pulse_count[] PROGMEM = " pulses\n";
+const char rev_amount[] PROGMEM = " revolutions\n";
+const char steps_per_sec[] PROGMEM = " steps/s\n";
+
+struct Card {
+  int scanTime;        // millisec
+  int offTime;         // millisec
+};
+
+Card cards[maxCardCount];
 
 AccelStepper stepper = AccelStepper(motorInterfaceType, stepPin, dirPin);
 
@@ -129,6 +150,7 @@ bool isHalted = false;
 
 void setup() {
   Serial.begin(9600);
+  delay(2000);
 
   // Sets initial position to 0. Also implicitly sets current speed to 0.
   // (Note: Please manually ensure that no card is over the reader before starting the Arduino.)
@@ -139,13 +161,20 @@ void setup() {
   stepper.setMaxSpeed(1600);
 
   printFromFlash(intro_speed);
-  runningSpeed = 800;
+  runningSpeed = 400;
+
+  printFromFlash(intro_holdtimes);
+  cards[0].scanTime = 1500;
+  cards[1].scanTime = 2000;
+  cards[2].scanTime = 2500;
+  cards[3].scanTime = 3000;
+  for (int i = 0; i < maxCardCount; i++) cards[i].offTime = 1500;
 }
 
 void loop() {
   
   if(runMode && revNum != revLimit) {
-    runMotor();
+    runSequence();
   }
   else if (Serial.available() > 0) { 
     serialCommandEvent();
@@ -155,15 +184,39 @@ void loop() {
 /* ==================================================================================================== */
 
 /* -------------------------------------------------------------------
- * Spin the stepper motor for 1 full revolution
+ * Start stepper motor sequence for 1 full revolution
+ * ------------------------------------------------------------------- */
+void runSequence() {
+  revNum++;
+  printFromFlashAndMore(rev_count1, revNum, rev_count2);
+  
+  runMotor(pulsesPerRev/8, cards[0].scanTime);
+  runMotor(2*pulsesPerRev/8, cards[0].offTime);
+  runMotor(3*pulsesPerRev/8, cards[1].scanTime);
+  runMotor(4*pulsesPerRev/8, cards[1].offTime);
+  runMotor(5*pulsesPerRev/8, cards[2].scanTime);
+  runMotor(6*pulsesPerRev/8, cards[2].offTime);
+  runMotor(7*pulsesPerRev/8, cards[3].scanTime);
+  runMotor(pulsesPerRev, cards[3].offTime);
+  
+  if (!isHalted)
+    stepper.setCurrentPosition(0);      // reset origin for next rev
+  
+  if(revNum == revLimit) {
+    printFromFlashAndMore(revs_done1, revNum, revs_done2);
+    runMode = false;
+    revNum = 0;
+    delay(1000);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Spin the stepper motor to a specified position from the origin
  *    Adapted from sample code found on: 
  * https://www.makerguides.com/a4988-stepper-motor-driver-arduino-tutorial/ 
- * ------------------------------------------------------------------- */
-bool runMotor() {
-  revNum++;
-
-  printFromFlashAndMore(rev_count1, revNum, rev_count2);
-  while(abs(stepper.currentPosition()) != abs(pulsesPerRev))
+ * --------------------------------------------------------------------------- */
+void runMotor(int targetPos, int holdTime) {
+  while(abs(stepper.currentPosition()) != abs(targetPos))
   {
     // Check for user commands via serial first
     if (Serial.available() > 0) serialCommandEvent();
@@ -178,16 +231,7 @@ bool runMotor() {
     stepper.setSpeed(runningSpeed);
     stepper.runSpeed();
   }
-  if (!isHalted)
-    stepper.setCurrentPosition(0);      // reset origin for next rev
-  
-  if(revNum == revLimit) {
-    printFromFlashAndMore(revs_done1, revNum, revs_done2);
-    runMode = false;
-    revNum = 0;
-    delay(1000);
-  }
-  delay(800);
+  delay(holdTime);
 }
 
 
@@ -199,7 +243,6 @@ void printFromFlashAndMore(const char* statement1, int val, const char* statemen
   printFromFlash(statement1);
   Serial.print(String(val));
   printFromFlash(statement2);
-  Serial.println();
 }
  
 void printFromFlash(const char* statement) {
@@ -251,60 +294,80 @@ void processCommand() {
   char *token;
   char commandMessage[numChars] = {};
   int commandArg = -1;
+  int commandArg2 = -1;
+  int argCount = 0;
   
   if (commandReady == true) {
+    
     token = strtok(charData, " ");                            // isolate command
-    strcpy(commandMessage, token);                  
-    token = strtok(NULL, "\n");                               // isolate argument
-
+    strcpy(commandMessage, token);    
+                  
+    token = strtok(NULL, " ");                                // isolate argument 1
+    
     if (token != NULL) {
       if (token[0] == '-') commandArg = 0 - atoi(token+1);    // account for negative val
       else commandArg = atoi(token);
+      argCount++;
     }
-    //else Serial.println("ERROR: Invalid input.\n  Try: [command] [arg]\n");
+                   
+    token = strtok(NULL, "\n");                               // isolate argument 2
+    if (token != NULL) {
+      if (token[0] == '-') commandArg2 = 0 - atoi(token+1);
+      else commandArg2 = atoi(token);
+      argCount++;
+    }
 
 
     // Match command and execute it
     // TODO: Create an alphabetically sorted array of string-function pairs and use binary search instead
-    if (strcmp(commandMessage, "pos") == 0) showCurrentPosition();
+    if (strcmp(commandMessage, "pos") == 0 && argCount == 0) showCurrentPosition();
 
-    else if (strcmp(commandMessage, "maxPulses") == 0 && token == NULL) showPulsesPerRev();
+    else if (strcmp(commandMessage, "maxPulses") == 0 && argCount == 0)   showPulsesPerRev();
     
-    else if (strcmp(commandMessage, "limit") == 0 && token == NULL) showRevLimit();
+    else if (strcmp(commandMessage, "limit") == 0 && argCount == 0)       showRevLimit();
     
-    else if (strcmp(commandMessage, "maxSpeed") == 0  && token == NULL) showMaxSpeed();
+    else if (strcmp(commandMessage, "maxSpeed") == 0  && argCount == 0)   showMaxSpeed();
     
-    else if (strcmp(commandMessage, "speed") == 0  && token == NULL) showCurrentSpeed();
+    else if (strcmp(commandMessage, "speed") == 0  && argCount == 0)      showCurrentSpeed();
 // -----------------------------------------------------------------------------------------------------
 
-    else if (strcmp(commandMessage, "maxPulses") == 0) updatePulsesPerRev(commandArg);
+    else if (strcmp(commandMessage, "maxPulses") == 0 && argCount == 1)   updatePulsesPerRev(commandArg);
     
-    else if (strcmp(commandMessage, "limit") == 0) updateRevLimit(commandArg);
+    else if (strcmp(commandMessage, "limit") == 0 && argCount == 1)       updateRevLimit(commandArg);
     
-    else if (strcmp(commandMessage, "maxSpeed") == 0) updateMaxSpeed(commandArg);
+    else if (strcmp(commandMessage, "maxSpeed") == 0 && argCount == 1)    updateMaxSpeed(commandArg);
     
-    else if (strcmp(commandMessage, "speed") == 0) updateSpeed(commandArg);
+    else if (strcmp(commandMessage, "speed") == 0 && argCount == 1)       updateSpeed(commandArg);
     
-    else if (strcmp(commandMessage, "origin") == 0) updateOrigin();
+    else if (strcmp(commandMessage, "origin") == 0 && argCount == 0)      updateOrigin();
 // -----------------------------------------------------------------------------------------------------
     
-    else if (strcmp(commandMessage, "move") == 0) displaceTo(false, commandArg);
+    else if (strcmp(commandMessage, "move") == 0 && argCount == 1)        displaceTo(false, commandArg);
       
-    else if (strcmp(commandMessage, "goto") == 0) displaceTo(true, commandArg);
+    else if (strcmp(commandMessage, "goto") == 0 && argCount == 1)        displaceTo(true, commandArg);
 // -----------------------------------------------------------------------------------------------------
     
-    else if (strcmp(commandMessage, "go") == 0) startMotor();
+    else if (strcmp(commandMessage, "go") == 0 && argCount == 0)          startMotor();
     
-    else if (strcmp(commandMessage, "halt") == 0) freezeMotor();
+    else if (strcmp(commandMessage, "halt") == 0 && argCount == 0)        freezeMotor();
     
-    else if (strcmp(commandMessage, "pause") == 0) stopMotor(false);
+    else if (strcmp(commandMessage, "pause") == 0 && argCount == 0)       stopMotor(false);
     
-    else if (strcmp(commandMessage, "stop") == 0) stopMotor(true);
+    else if (strcmp(commandMessage, "stop") == 0 && argCount == 0)        stopMotor(true);
     
-    else if (strcmp(commandMessage, "restart") == 0) restartMotor();
+    else if (strcmp(commandMessage, "restart") == 0 && argCount == 0)     restartMotor();
+// -----------------------------------------------------------------------------------------------------
+
+    else if (strcmp(commandMessage, "scantime") == 0 && argCount == 1)    showScanTime(commandArg);
+
+    else if (strcmp(commandMessage, "offtime") == 0 && argCount == 1)     showOffTime(commandArg);
+
+    else if (strcmp(commandMessage, "scantime") == 0 && argCount == 2)    updateScanTime(commandArg, commandArg2);
+
+    else if (strcmp(commandMessage, "offtime") == 0 && argCount == 2)     updateOffTime(commandArg, commandArg2);
+// -----------------------------------------------------------------------------------------------------    
 
     else printFromFlash(error_invalid);
-    
     commandReady = false;
   }
 }
@@ -494,4 +557,40 @@ void restartMotor() {
   runMode = true;
   printFromFlash(status_restarting);
   delay(1500);
+}
+
+// -----------------------------------------------------------------------------------------------------
+
+/*  'scantime' */
+void showScanTime(int cardId) {
+  printFromFlashAndMore(scantime_get1, cardId, scantime_2);
+  Serial.println(String(cards[cardId-1].scanTime) + " ms");
+}
+
+/*  'offtime' */
+void showOffTime(int cardId) {
+  printFromFlashAndMore(offtime_get1, cardId, offtime_2);
+  Serial.println(String(cards[cardId-1].offTime) + " ms");
+}
+
+/*  'scantime [card #] [millisec]'
+ *  
+ *  Sets the time a specified card is over the reader for.
+*/
+void updateScanTime(int cardId, int holdTime) {
+  cards[cardId-1].scanTime = holdTime;
+  
+  printFromFlashAndMore(scantime_set1, cardId, scantime_2);
+  Serial.println(String(holdTime) + " ms");
+}
+
+/*  'offtime [card #] [millisec]'
+ *  
+ *  Sets the time a specified card is off the reader for, right after scanning.
+*/
+void updateOffTime(int cardId, int holdTime) {
+  cards[cardId-1].offTime = holdTime;
+  
+  printFromFlashAndMore(offtime_set1, cardId, offtime_2);
+  Serial.println(String(holdTime) + " ms");
 }
