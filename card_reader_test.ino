@@ -14,30 +14,30 @@
  *    This code makes possible basic serial commands that a user or script can utilize to control the motor.
  *    Such commands include:
  *    
- *              pos              - Shows the current position relative to origin.
+ *              pos              - Shows the current microstep position relative to origin.
  *              
  *              maxPulses [int]  - Sets the number of pulses per full revolution of the motor.
- *                                 This must match the step configuration of the accompanying stepper driver.
+ *                                 This must match the microstep setting of the accompanying stepper driver.
  *                                 If no arg is specified, prints the current number instead.
  *
  *              limit [int]      - Sets the max number of full revolutions the motor will spin.
  *                                 If no arg is specified, prints the current number instead.
  *
- *              maxSpeed [int]   - Sets the max speed of the motor in steps/sec.
+ *              maxSpeed [int]   - Sets the max speed of the motor in microsteps/sec.
  *                                 If no arg is specified, prints the current max speed instead.
  *                             
- *              speed [int]      - Sets the current speed of the motor in steps/sec.
+ *              speed [int]      - Sets the current speed of the motor in microsteps/sec.
  *                                 If no arg is specified, prints the current speed instead.
  *                             
- *              origin           - Sets the origin (i.e. position 0) of the motor. 
+ *              origin           - Sets the origin (i.e. microstep position 0) of the motor. 
  *                                 For consistency, this must be done before any sequence is run.
  *                             
  *              move [int]       - If the motor is not in runmode, moves the motor by the specified
- *                                 amount of pulses. 
+ *                                 amount of microsteps. 
  *                                 A negative value will cause the motor to spin backwards.
  *                                 
  *              goto [int]       - If the motor is not in runmode, moves the motor to the specified
- *                                 position, relative to the origin.
+ *                                 microstep position, relative to the origin.
  *                                 [TODO: Use degrees instead of pulse values?]
  *                                 
  *              go               - Enables runmode, and starts the motor running sequence, whether 
@@ -65,8 +65,8 @@
 
 // Serial print statements stored in flash memory instead of SRAM
 const char intro_origin[] PROGMEM = "<Set current position as origin>\n";
-const char intro_maxspeed[] PROGMEM = "<Set max speed to 1600 steps/sec>\n";
-const char intro_speed[] PROGMEM = "<Set running speed for all cards to 800 steps/sec>\n";
+const char intro_maxspeed[] PROGMEM = "<Set max speed to 1600 microsteps/sec>\n";
+const char intro_speed[] PROGMEM = "<Set running speed for all cards to 800 microsteps/sec>\n";
 const char rev_count1[] PROGMEM = "<Rev ";
 const char rev_count2[] PROGMEM = ">\n";
 const char revs_done1[] PROGMEM = "STATUS: ";
@@ -74,7 +74,7 @@ const char revs_done2[] PROGMEM = " revolutions done. Stopping motor...";
 const char serial_warning[] PROGMEM = "<Warning: Index has exceeded string length>\n";
 const char error_invalid[] PROGMEM = "ERROR: Please input a valid command.\n";
 const char pos_get1[] PROGMEM = "GET: Current motor position is ";
-const char pos_get2[] PROGMEM = " steps from origin";
+const char pos_get2[] PROGMEM = " microsteps from origin";
 const char maxpulses_get1[] PROGMEM = "GET: Each full revolution requires ";
 const char limit_get1[] PROGMEM = "GET: Motor will run up to ";
 const char maxspeed_get1[] PROGMEM = "GET: Max motor speed is ";
@@ -89,8 +89,8 @@ const char origin_set[] PROGMEM = "UPDATE: origin has been reset to current posi
 const char error_running_a[] PROGMEM = "ERROR: motor must first not be running\n";
 const char error_running_b[] PROGMEM = "ERROR: motor is already running\n";
 const char error_bounds[] PROGMEM = "ERROR: target position must be between 0 and ";
-const char displace_by2[] PROGMEM = " steps";
-const char displace_to2[] PROGMEM = " steps from origin";
+const char displace_by2[] PROGMEM = " microsteps";
+const char displace_to2[] PROGMEM = " microsteps from origin";
 const char status_running[] PROGMEM = "STATUS: motor is now running\n";
 const char error_limit[] PROGMEM = "ERROR: limit has been reached, cannot resume without restarting\n";
 const char error_frozen[] PROGMEM = "ERROR: motor is already frozen\n";
@@ -99,15 +99,15 @@ const char error_stopped[] PROGMEM = "ERROR: motor is already paused/stopped\n";
 const char status_pausing[] PROGMEM = "STATUS: motor is now pausing...\n";
 const char status_stopped[] PROGMEM = "STATUS: motor is now stopped. Counter has been reset.\n";
 const char status_restarting[] PROGMEM = "STATUS: motor is now restarting...\n";
-const char pulse_count[] PROGMEM = " pulses";
+const char pulse_count[] PROGMEM = " pulses, or microsteps";
 const char rev_amount[] PROGMEM = " revolutions";
-const char steps_per_sec[] PROGMEM = " steps/s";
+const char steps_per_sec[] PROGMEM = " microsteps/s";
 const char displace_msg[] PROGMEM = "DISPLACE: ";
 
 AccelStepper stepper = AccelStepper(motorInterfaceType, stepPin, dirPin);
 
-// Depends on stepper motor model and configuration (Default: 800 for NEMA 23)
-int pulsesPerRev = 800;
+// Depends on stepper motor model and configuration (Default: 1600 for NEMA 23)
+int pulsesPerRev = 1600;
 
 // For counting number of motor revolutions
 int revLimit = 10;
@@ -352,7 +352,7 @@ void updateRevLimit(int newLimit) {
   printFromFlashAndMore(limit_set1, revLimit, rev_amount);
 }
 
-/* 'maxSpeed [steps per sec]' */
+/* 'maxSpeed [microsteps per sec]' */
 void updateMaxSpeed(int newMaxSpeed) {
   if (newMaxSpeed < runningSpeed) {
     printFromFlash(autoadjust_speed);
@@ -363,7 +363,7 @@ void updateMaxSpeed(int newMaxSpeed) {
   printFromFlashAndMore(maxspeed_set1, int(stepper.maxSpeed()), steps_per_sec);
 }
 
-/* 'speed [steps per sec]' */
+/* 'speed [microsteps per sec]' */
 void updateSpeed(int newSpeed) {
   if (newSpeed == 0) freezeMotor();
   
@@ -385,12 +385,12 @@ void updateOrigin() {
 }
 // -----------------------------------------------------------------------------------------------------
 
-/*  'move [# steps]' or 'goto [steps from origin]' 
+/*  'move [# microsteps]' or 'goto [microsteps from origin]' 
  *  
- *  If 'isAbsolute' is false, then displace the motor by the specified # of steps from 
+ *  If 'isAbsolute' is false, then displace the motor by the specified # of microsteps from 
  *  the current position.
  *  
- *  Otherwise, displace the motor towards the position that is at that # of steps from
+ *  Otherwise, displace the motor towards the position that is at that # of microsteps from
  *  the set origin.
 */
 void displaceTo(bool isAbsolute, int steps) {
