@@ -73,7 +73,7 @@
 // Serial print statements stored in flash memory instead of SRAM
 const char intro_origin[] PROGMEM = "<Set current position as origin>\n";
 const char intro_maxspeed[] PROGMEM = "<Set max speed to 1600 steps/sec>\n";
-const char intro_speed[] PROGMEM = "<Set running speed for all cards to 400 steps/sec>\n";
+const char intro_speed[] PROGMEM = "<Set running speed for all cards to 800 steps/sec>\n";
 const char intro_holdtimes[] PROGMEM = "<Set default scantimes and offtimes for all cards>\n";
 const char rev_count1[] PROGMEM = "<Rev ";
 const char rev_count2[] PROGMEM = ">\n\n";
@@ -86,13 +86,13 @@ const char pos_get2[] PROGMEM = " steps from origin\n";
 const char maxpulses_get1[] PROGMEM = "GET: Each full revolution requires ";
 const char limit_get1[] PROGMEM = "GET: Motor will run up to ";
 const char maxspeed_get1[] PROGMEM = "GET: Max motor speed is ";
-const char speed_get1[] PROGMEM = "GET: Current motor speed is ";
-const char maxpulses_set1[] PROGMEM = "GET: Each full revolution now requires ";
+const char speed_get1[] PROGMEM = "GET: Current motor speed for Card ";
+const char maxpulses_set1[] PROGMEM = "UPDATE: Each full revolution now requires ";
 const char limit_set1[] PROGMEM = "UPDATE: motor will now spin up to ";
 const char autoadjust_speed[] PROGMEM = "UPDATE: adjusting running speed to match new max speed\n";
 const char maxspeed_set1[] PROGMEM = "UPDATE: max motor speed is now ";
 const char throttle_speed1[] PROGMEM = "UPDATE: requested speed is higher than maxSpeed of ";
-const char speed_set1[] PROGMEM = "UPDATE: motor running speed is now ";
+const char speed_set1[] PROGMEM = "UPDATE: motor running speed for Card ";
 const char origin_set[] PROGMEM = "UPDATE: origin has been reset to current position\n";
 const char error_running_a[] PROGMEM = "ERROR: motor must first not be running\n";
 const char error_running_b[] PROGMEM = "ERROR: motor is already running\n";
@@ -108,27 +108,38 @@ const char error_stopped[] PROGMEM = "ERROR: motor is already paused/stopped\n";
 const char status_pausing[] PROGMEM = "STATUS: motor is now pausing...\n";
 const char status_stopped[] PROGMEM = "STATUS: motor is now stopping...\n";
 const char status_restarting[] PROGMEM = "STATUS: motor is now restarting...\n";
+const char error_bad_id[] PROGMEM = "ERROR: Bad ID given\n";
 const char scantime_set1[] PROGMEM = "UPDATE: Scan time for Card ";
 const char scantime_get1[] PROGMEM = "GET: Scan time for Card ";
-const char scantime_2[] PROGMEM = " is now ";
 const char offtime_set1[] PROGMEM = "UPDATE: Off time for Card ";
 const char offtime_get1[] PROGMEM = "GET: Off time for Card ";
 const char offtime_2[] PROGMEM = " after scanning is now ";
+const char is_now[] PROGMEM = " is now ";
 const char pulse_count[] PROGMEM = " pulses\n";
 const char rev_amount[] PROGMEM = " revolutions\n";
 const char steps_per_sec[] PROGMEM = " steps/s\n";
 
 struct Card {
+  int runningSpeed;    // steps per sec
   int scanTime;        // millisec
   int offTime;         // millisec
+  int minPos;          // steps from origin
+  int maxPos;          // steps from origin
+};
+
+struct MotorTask {
+  int card;
+  int target;
+  int msHold;
 };
 
 Card cards[maxCardCount];
+MotorTask tasks[maxCardCount*2];
 
 AccelStepper stepper = AccelStepper(motorInterfaceType, stepPin, dirPin);
 
-// Depends on stepper motor model and configuration (Default: 800 for NEMA 23)
-int pulsesPerRev = 800;
+// Depends on stepper motor model and configuration (Default: 1600 for NEMA 23)
+int pulsesPerRev = 1600;
 
 // For counting number of motor revolutions
 int revLimit = 10;
@@ -140,7 +151,8 @@ char charData[numChars] = {};
 bool commandReady = false;
 
 // Affects and tracks control of motor
-int runningSpeed = 0;
+int currentId = 1;                        // tracks which card is being scanned
+int currentTask = 0;
 int tempSpeed = 0;                        // previous or new speed val to be used after a halt
 bool runMode = false;
 bool isHalted = false;
@@ -157,11 +169,18 @@ void setup() {
   printFromFlash(intro_origin);
   stepper.setCurrentPosition(0);
 
+  // Sets thresholds that correlate step positions to cards
+  // (Each card should have 1/4 of the available positions in a full revolution)
+  for (int i = 0; i < maxCardCount; i++) {
+    cards[i].maxPos = (i+1) * (pulsesPerRev/4);
+    cards[i].minPos = cards[i].maxPos - (pulsesPerRev/4) + 1;
+  }
+
   printFromFlash(intro_maxspeed);
   stepper.setMaxSpeed(1600);
 
   printFromFlash(intro_speed);
-  runningSpeed = 400;
+  for (int i = 0; i < maxCardCount; i++) cards[i].runningSpeed = 800;
 
   printFromFlash(intro_holdtimes);
   cards[0].scanTime = 1500;
@@ -169,6 +188,17 @@ void setup() {
   cards[2].scanTime = 2500;
   cards[3].scanTime = 3000;
   for (int i = 0; i < maxCardCount; i++) cards[i].offTime = 1500;
+
+  // Define motor tasks run by the sequence
+  for (int i = 0; i < maxCardCount; i++) {
+    tasks[(i*2)].card     = i + 1;
+    tasks[(i*2)].target   = cards[i].maxPos - pulsesPerRev/8;
+    tasks[(i*2)].msHold   = cards[i].scanTime;
+    
+    tasks[(i*2)+1].card   = i + 1;
+    tasks[(i*2)+1].target = cards[i].maxPos;
+    tasks[(i*2)+1].msHold = cards[i].offTime;
+  }
 }
 
 void loop() {
@@ -189,15 +219,14 @@ void loop() {
 void runSequence() {
   revNum++;
   printFromFlashAndMore(rev_count1, revNum, rev_count2);
-  
-  runMotor(pulsesPerRev/8, cards[0].scanTime);
-  runMotor(2*pulsesPerRev/8, cards[0].offTime);
-  runMotor(3*pulsesPerRev/8, cards[1].scanTime);
-  runMotor(4*pulsesPerRev/8, cards[1].offTime);
-  runMotor(5*pulsesPerRev/8, cards[2].scanTime);
-  runMotor(6*pulsesPerRev/8, cards[2].offTime);
-  runMotor(7*pulsesPerRev/8, cards[3].scanTime);
-  runMotor(pulsesPerRev, cards[3].offTime);
+
+  Serial.println("task = " + String(currentTask));
+  while (currentTask < maxCardCount*2) {
+    runMotor(tasks[currentTask].card, tasks[currentTask].target, tasks[currentTask].msHold);
+    currentTask++;
+    Serial.println("task = " + String(currentTask));
+  }
+  currentTask = 0;
   
   if (!isHalted)
     stepper.setCurrentPosition(0);      // reset origin for next rev
@@ -215,22 +244,27 @@ void runSequence() {
  *    Adapted from sample code found on: 
  * https://www.makerguides.com/a4988-stepper-motor-driver-arduino-tutorial/ 
  * --------------------------------------------------------------------------- */
-void runMotor(int targetPos, int holdTime) {
+void runMotor(int cardId, int targetPos, int holdTime) {
+  Serial.println("target = " + String(targetPos));
   while(abs(stepper.currentPosition()) != abs(targetPos))
   {
+    currentId = cardId;
+
     // Check for user commands via serial first
     if (Serial.available() > 0) serialCommandEvent();
 
     // Freezing the current rev, then possibly displacing position, will
     // interrupt the sequence, so better restart last iteration
-    if (runningSpeed != 0 && isHalted) {
+    if (cards[cardId-1].runningSpeed != 0 && isHalted) {
       revNum--;
       break;
     }
 
-    stepper.setSpeed(runningSpeed);
+    stepper.setSpeed(cards[cardId-1].runningSpeed);
     stepper.runSpeed();
   }
+  Serial.println("[" + String(currentId) + "]: " + String(stepper.currentPosition()));
+  Serial.println();
   delay(holdTime);
 }
 
@@ -328,7 +362,7 @@ void processCommand() {
     
     else if (strcmp(commandMessage, "maxSpeed") == 0  && argCount == 0)   showMaxSpeed();
     
-    else if (strcmp(commandMessage, "speed") == 0  && argCount == 0)      showCurrentSpeed();
+    else if (strcmp(commandMessage, "speed") == 0  && argCount == 1)      showCurrentSpeed(commandArg);
 // -----------------------------------------------------------------------------------------------------
 
     else if (strcmp(commandMessage, "maxPulses") == 0 && argCount == 1)   updatePulsesPerRev(commandArg);
@@ -337,7 +371,7 @@ void processCommand() {
     
     else if (strcmp(commandMessage, "maxSpeed") == 0 && argCount == 1)    updateMaxSpeed(commandArg);
     
-    else if (strcmp(commandMessage, "speed") == 0 && argCount == 1)       updateSpeed(commandArg);
+    else if (strcmp(commandMessage, "speed") == 0 && argCount == 2)       updateSpeed(commandArg, commandArg2);
     
     else if (strcmp(commandMessage, "origin") == 0 && argCount == 0)      updateOrigin();
 // -----------------------------------------------------------------------------------------------------
@@ -398,12 +432,15 @@ void showMaxSpeed() {
 }
 
 /* 'speed' */
-void showCurrentSpeed() {
-  printFromFlashAndMore(speed_get1, runningSpeed, steps_per_sec);
+void showCurrentSpeed(int cardId) {
+  printFromFlashAndMore(speed_get1, cardId, is_now);
+  Serial.print(String(cards[cardId].runningSpeed));
+  printFromFlash(steps_per_sec);
 }
 // -----------------------------------------------------------------------------------------------------
 
 /* 'maxPulses [# pulses per revolution]' */
+// TODO: Get this to work mid-rev
 void updatePulsesPerRev(int newConfig) {
   pulsesPerRev = newConfig;
   printFromFlashAndMore(maxpulses_set1, pulsesPerRev, pulse_count);
@@ -417,28 +454,32 @@ void updateRevLimit(int newLimit) {
 
 /* 'maxSpeed [steps per sec]' */
 void updateMaxSpeed(int newMaxSpeed) {
-  if (newMaxSpeed < runningSpeed) {
-    printFromFlash(autoadjust_speed);
-    runningSpeed = newMaxSpeed;
+
+  for (int i = 0; i < maxCardCount; i++) {
+    if (newMaxSpeed < cards[i].runningSpeed) {
+      printFromFlash(autoadjust_speed);
+      cards[i].runningSpeed = newMaxSpeed;
+    }
   }
-  
   stepper.setMaxSpeed(newMaxSpeed);
   printFromFlashAndMore(maxspeed_set1, int(stepper.maxSpeed()), steps_per_sec);
 }
 
 /* 'speed [steps per sec]' */
-void updateSpeed(int newSpeed) {
+void updateSpeed(int cardId, int newSpeed) {
   if (newSpeed == 0) freezeMotor();
   
   else if (newSpeed > stepper.maxSpeed()) {
     printFromFlashAndMore(throttle_speed1, int(stepper.maxSpeed()), steps_per_sec);
     newSpeed = int(stepper.maxSpeed());
-    runningSpeed = newSpeed;
+    cards[cardId-1].runningSpeed = newSpeed;
   }
   else if (isHalted) tempSpeed = newSpeed;
-  else runningSpeed = newSpeed;
-  
-  printFromFlashAndMore(speed_set1, newSpeed, steps_per_sec);
+  else cards[cardId-1].runningSpeed = newSpeed;
+
+  printFromFlashAndMore(speed_set1, cardId, is_now);
+  Serial.print(String(newSpeed));
+  printFromFlash(steps_per_sec);
 }
 
 /* 'origin' */
@@ -456,15 +497,20 @@ void updateOrigin() {
  *  Otherwise, displace the motor towards the position that is at that # of steps from
  *  the set origin.
 */
+// TODO: 'move' screws up origin reset? Very likely due to the 8 runMotor()'s
 void displaceTo(bool isAbsolute, int steps) {
   if (runMode) {
     printFromFlash(error_running_a);
+  }
+  else if (currentId < 1 || maxCardCount < currentId) {
+    printFromFlash(error_bad_id);
+    return;
   }
   else if (isAbsolute && (0 > steps || steps > pulsesPerRev)) {
     printFromFlashAndMore(error_bounds, pulsesPerRev, "");
   }
   else {
-    if (isHalted) runningSpeed = tempSpeed;
+    if (isHalted) cards[currentId-1].runningSpeed = tempSpeed;
 
     // Set new target position, whether relative to current position or origin
     if (!isAbsolute) {
@@ -475,10 +521,23 @@ void displaceTo(bool isAbsolute, int steps) {
       printFromFlashAndMore(displace_msg, steps, displace_to2);
       stepper.moveTo(steps);
     }
-
+    Serial.println("Target [" + String(currentId) + "]: " + String(stepper.targetPosition()));
+    
     while(stepper.currentPosition() != stepper.targetPosition()) {
-      stepper.setSpeed(runningSpeed);
+      stepper.setSpeed(cards[currentId-1].runningSpeed);
       stepper.runSpeedToPosition();
+
+      // Update current ID if a different positional threshold is reached
+      if (stepper.currentPosition() < cards[currentId-1].minPos) {
+        Serial.println("minPos: " + String(cards[currentId-1].minPos));
+        currentId--;
+      }
+      else if (cards[currentId-1].maxPos < stepper.currentPosition()) {
+        Serial.println("maxPos: " + String(cards[currentId-1].maxPos));
+        currentId++;
+      }
+      
+      Serial.println("Pos [" + String(currentId) + "]: " + String(stepper.currentPosition()));
     }
     
     // 'True' modulo operation (Python's result) to keep position value within bounds
@@ -494,12 +553,12 @@ void displaceTo(bool isAbsolute, int steps) {
  *  Starts or resumes the running sequence.
 */
 void startMotor() {
-  if (runMode && runningSpeed != 0) printFromFlash(error_running_b);
+  if (runMode && cards[currentId-1].runningSpeed != 0) printFromFlash(error_running_b);
   
   else if (revNum != revLimit) {
 
     if (isHalted) {
-      runningSpeed = tempSpeed;
+      cards[currentId-1].runningSpeed = tempSpeed;
       isHalted = false;
     }   
     runMode = true;
@@ -518,8 +577,8 @@ void freezeMotor() {
   else {
     isHalted = true;
     runMode = false;
-    tempSpeed = runningSpeed;
-    runningSpeed = 0;
+    tempSpeed = cards[currentId-1].runningSpeed;
+    cards[currentId-1].runningSpeed = 0;
     stepper.stop();
     printFromFlash(status_frozen);
   }
@@ -563,7 +622,7 @@ void restartMotor() {
 
 /*  'scantime' */
 void showScanTime(int cardId) {
-  printFromFlashAndMore(scantime_get1, cardId, scantime_2);
+  printFromFlashAndMore(scantime_get1, cardId, is_now);
   Serial.println(String(cards[cardId-1].scanTime) + " ms");
 }
 
@@ -580,7 +639,7 @@ void showOffTime(int cardId) {
 void updateScanTime(int cardId, int holdTime) {
   cards[cardId-1].scanTime = holdTime;
   
-  printFromFlashAndMore(scantime_set1, cardId, scantime_2);
+  printFromFlashAndMore(scantime_set1, cardId, is_now);
   Serial.println(String(holdTime) + " ms");
 }
 
