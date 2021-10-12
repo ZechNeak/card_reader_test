@@ -66,7 +66,7 @@
 // Serial print statements stored in flash memory instead of SRAM
 const char intro_origin[] PROGMEM = "<Set current position as origin>\n";
 const char intro_maxspeed[] PROGMEM = "<Set max speed to 1600 microsteps/sec>\n";
-const char intro_speed[] PROGMEM = "<Set running speed for all cards to 800 microsteps/sec>\n";
+const char intro_speed[] PROGMEM = "<Set running speed for all cards to 150 microsteps/sec>\n";
 const char rev_count1[] PROGMEM = "<Rev ";
 const char rev_count2[] PROGMEM = ">\n";
 const char revs_done1[] PROGMEM = "STATUS: ";
@@ -139,7 +139,7 @@ void setup() {
   stepper.setMaxSpeed(1600);
 
   printFromFlash(intro_speed);
-  runningSpeed = 800;
+  runningSpeed = 150;
 }
 
 void loop() {
